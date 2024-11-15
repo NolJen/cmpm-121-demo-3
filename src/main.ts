@@ -43,29 +43,76 @@ function updatePlayerCoinDisplay() {
   statusPanel.textContent = `Player Coins: ${playerCoins}`;
 }
 
-// Cache Creation
-function spawnCache(i: number, j: number) {
-  // Creates a cache at the given grid cell (i, j) with random coin value
-  const bounds = leaflet.latLngBounds([
-    [
-      oakesClassroom.lat + i * tileDegrees,
-      oakesClassroom.lng + j * tileDegrees,
-    ],
-    [
-      oakesClassroom.lat + (i + 1) * tileDegrees,
-      oakesClassroom.lng + (j + 1) * tileDegrees,
-    ],
-  ]);
+// Flyweight Pattern for Cells
+class Cell {
+  private static cellCache: Map<string, Cell> = new Map(); // Cache for flyweight pattern
 
-  let cacheCoins = Math.floor(luck([i, j, "initialValue"].toString()) * 10) + 1; // Randomized coins in cache
+  private constructor(public i: number, public j: number) {}
+
+  static fromLatLng(lat: number, lng: number): Cell {
+    const i = Math.round((lat - oakesClassroom.lat) / tileDegrees);
+    const j = Math.round((lng - oakesClassroom.lng) / tileDegrees);
+    const key = `${i}:${j}`;
+
+    if (!Cell.cellCache.has(key)) {
+      Cell.cellCache.set(key, new Cell(i, j));
+    }
+    return Cell.cellCache.get(key)!;
+  }
+
+  static fromCoordinates(i: number, j: number): Cell {
+    const key = `${i}:${j}`;
+    if (!Cell.cellCache.has(key)) {
+      Cell.cellCache.set(key, new Cell(i, j));
+    }
+    return Cell.cellCache.get(key)!;
+  }
+
+  toLatLngBounds(): leaflet.LatLngBounds {
+    return leaflet.latLngBounds([
+      [
+        oakesClassroom.lat + this.i * tileDegrees,
+        oakesClassroom.lng + this.j * tileDegrees,
+      ],
+      [
+        oakesClassroom.lat + (this.i + 1) * tileDegrees,
+        oakesClassroom.lng + (this.j + 1) * tileDegrees,
+      ],
+    ]);
+  }
+}
+
+// Cache Representation
+interface Cache {
+  coins: Coin[];
+}
+
+class Coin {
+  constructor(public cell: Cell, public serial: number) {}
+
+  get identifier(): string {
+    return `${this.cell.i}:${this.cell.j}#${this.serial}`;
+  }
+}
+
+function spawnCache(cell: Cell) {
+  // Creates a cache at the given grid cell with random coin value
+  const bounds = cell.toLatLngBounds();
+  const cacheCoinsCount =
+    Math.floor(luck([cell.i, cell.j, "initialValue"].toString()) * 10) + 1; // Randomized coins in cache
+
+  const coins = Array.from(
+    { length: cacheCoinsCount },
+    (_, index) => new Coin(cell, index),
+  );
 
   const rect = leaflet.rectangle(bounds).addTo(map);
   rect.bindPopup(() => {
     // Popup with collect and deposit actions
     const popupDiv = document.createElement("div");
     popupDiv.innerHTML = `
-      <div>Cache Location: (${i}, ${j})</div>
-      <div>Coins Available: <span id="value">${cacheCoins}</span></div>
+      <div>Cache Location: (${cell.i}, ${cell.j})</div>
+      <div>Coins Available: <span id="value">${coins.length}</span></div>
       <button id="collectButton">Collect Coins</button>
       <input type="number" id="depositAmount" placeholder="Amount to Deposit" min="1">
       <button id="depositButton">Deposit Coins</button>`;
@@ -73,9 +120,9 @@ function spawnCache(i: number, j: number) {
     // Collect coins from cache
     popupDiv.querySelector<HTMLButtonElement>("#collectButton")!
       .addEventListener("click", () => {
-        if (cacheCoins > 0) {
-          playerCoins += cacheCoins; // Add cache coins to player's total
-          cacheCoins = 0; // Cache is now empty
+        if (coins.length > 0) {
+          playerCoins += coins.length; // Add cache coins to player's total
+          coins.length = 0; // Cache is now empty
           updatePlayerCoinDisplay();
           popupDiv.querySelector<HTMLSpanElement>("#value")!.textContent = "0";
           alert("Collected successfully!");
@@ -94,10 +141,15 @@ function spawnCache(i: number, j: number) {
 
         if (playerCoins >= depositAmount && depositAmount > 0) {
           playerCoins -= depositAmount; // Subtract deposited coins from player
-          cacheCoins += depositAmount; // Add deposited coins to cache
+          coins.push(
+            ...Array.from(
+              { length: depositAmount },
+              (_, index) => new Coin(cell, coins.length + index),
+            ),
+          );
           updatePlayerCoinDisplay();
-          popupDiv.querySelector<HTMLSpanElement>("#value")!.textContent =
-            cacheCoins.toString();
+          popupDiv.querySelector<HTMLSpanElement>("#value")!.textContent = coins
+            .length.toString();
           alert(`Deposited ${depositAmount} coins successfully!`);
           depositInput.value = ""; // Clear input field
         } else {
@@ -115,7 +167,8 @@ function initializeCaches() {
   for (let i = -neighborhoodSize; i <= neighborhoodSize; i++) {
     for (let j = -neighborhoodSize; j <= neighborhoodSize; j++) {
       if (luck(`${i},${j}`) < cacheSpawnProbability) {
-        spawnCache(i, j); // Spawn cache based on probability
+        const cell = Cell.fromCoordinates(i, j);
+        spawnCache(cell); // Spawn cache based on probability
       }
     }
   }
