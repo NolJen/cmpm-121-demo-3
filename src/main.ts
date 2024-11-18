@@ -13,6 +13,8 @@ const gameplayZoomLevel = 19; // Fixed zoom level for gameplay
 
 // Player Data
 let playerCoins = 0; // Tracks player's coin count
+let playerPosition = oakesClassroom;
+const cacheStates = new Map(); // Stores cache state by cell coordinates
 
 // Initialize Map
 const map = leaflet.map(document.getElementById("map")!, {
@@ -169,6 +171,102 @@ function initializeCaches() {
       if (luck(`${i},${j}`) < cacheSpawnProbability) {
         const cell = Cell.fromCoordinates(i, j);
         spawnCache(cell); // Spawn cache based on probability
+      }
+    }
+  }
+}
+
+// Constants for Player Movement
+const directions = {
+  north: { lat: tileDegrees, lng: 0 },
+  south: { lat: -tileDegrees, lng: 0 },
+  east: { lat: 0, lng: tileDegrees },
+  west: { lat: 0, lng: -tileDegrees },
+};
+
+// Player Movement
+function movePlayer(direction: { lat: number; lng: number }) {
+  // Update player's position based on direction
+  playerPosition = leaflet.latLng(
+    playerPosition.lat + direction.lat,
+    playerPosition.lng + direction.lng,
+  );
+
+  playerMarker.setLatLng(playerPosition); // Move player marker
+  map.setView(playerPosition); // Center map on player's new position
+
+  const newCell = Cell.fromLatLng(playerPosition.lat, playerPosition.lng);
+  regenerateCaches(newCell); // Regenerate caches in new neighborhood
+
+  // Dispatch player movement event
+  const playerMovedEvent = new CustomEvent("player-moved", {
+    detail: { position: playerPosition },
+  });
+  document.dispatchEvent(playerMovedEvent);
+}
+
+// Attach Event Listeners to Movement Buttons
+document.getElementById("north")?.addEventListener(
+  "click",
+  () => movePlayer(directions.north),
+);
+document.getElementById("south")?.addEventListener(
+  "click",
+  () => movePlayer(directions.south),
+);
+document.getElementById("east")?.addEventListener(
+  "click",
+  () => movePlayer(directions.east),
+);
+document.getElementById("west")?.addEventListener(
+  "click",
+  () => movePlayer(directions.west),
+);
+
+// Memento Pattern to Save and Restore Cache State
+class CacheMemento {
+  constructor(public coins: Coin[]) {}
+}
+
+function saveCacheState(cell: Cell) {
+  const cache = cacheStates.get(cell);
+  if (cache) {
+    cacheStates.set(cell, new CacheMemento([...cache.coins]));
+  }
+}
+
+function restoreCacheState(cell: Cell): Cache | null {
+  if (cacheStates.has(cell)) {
+    const memento = cacheStates.get(cell);
+    return { coins: [...memento.coins] };
+  }
+  return null;
+}
+
+// Cache Regeneration
+function regenerateCaches(currentCell: Cell) {
+  // Remove all caches currently on the map
+  map.eachLayer((layer: leaflet.Layer) => {
+    if (layer instanceof leaflet.Rectangle) {
+      map.removeLayer(layer);
+    }
+  });
+
+  // Spawn new caches in the neighborhood
+  for (let i = -neighborhoodSize; i <= neighborhoodSize; i++) {
+    for (let j = -neighborhoodSize; j <= neighborhoodSize; j++) {
+      const cell = Cell.fromCoordinates(currentCell.i + i, currentCell.j + j);
+      if (!cacheStates.has(cell)) {
+        if (luck(`${cell.i},${cell.j}`) < cacheSpawnProbability) {
+          spawnCache(cell);
+          saveCacheState(cell);
+        }
+      } else {
+        // Restore existing cache state
+        const cache = restoreCacheState(cell);
+        if (cache) {
+          spawnCache(cell);
+        }
       }
     }
   }
